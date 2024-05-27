@@ -7,6 +7,6 @@ Interfacing with ATI Mini40 NETBA
 3. In msys2-UCRT64 terminal, run ``pacman -S mingw-w64-ucrt-x86_64-gcc``
 4. Install git version of winpthreads - https://packages.msys2.org/package/mingw-w64-x86_64-winpthreads-git
 5. Compile using ``gcc netft_WIN_v9.c -o netft_WIN_v9 -lws2_32`` in cmd
-6. Add C:\msys64\ucrt64\bin to path
+6. Add C:\msys64\ucrt64\bin to path by: Start --> Edit the system enviornment variables --> Environment Variables --> Select Path Variable --> Edit... --> New --> C:\msys64\ucrt64\bin -- OK.
 
 Reference - https://mingw-w64-public.narkive.com/5N7Clzzj/mingw-w64-clock-gettime  
