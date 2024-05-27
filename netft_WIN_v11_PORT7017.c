@@ -1,4 +1,4 @@
-/* Simple demo showing how to communicate with Net F/T using C language. */
+/* Simple demo showing how to communicate with Net F/T using C language. Queries Mini40 IP and ATI# to record data into a .txt file while also streaming data real time to UDP port 7017 on localhost. */
 
 #include <winsock2.h>
 #include <sys/types.h>
