@@ -1,4 +1,4 @@
-/* Simple demo showing how to communicate with Net F/T using C language. */
+/* File management code */
 
 #include <sys/types.h>
 #include <string.h>
