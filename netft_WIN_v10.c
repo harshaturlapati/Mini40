@@ -1,4 +1,4 @@
-/* Simple demo showing how to communicate with Net F/T using C language. */
+/* Simple demo showing how to communicate with Net F/T using C language. To be used after running define_exp_v4.exe. */
 
 #include <winsock2.h>
 #include <sys/types.h>
