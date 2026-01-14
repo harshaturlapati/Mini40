@@ -1,0 +1,174 @@
+/*
+  neat_netft_to_udp_Qquit.c
+  Quit cleanly by pressing 'q' or 'Q'
+
+  Build:
+    gcc neat_netft_to_udp_Qquit.c -O2 -Wall -Wextra -o neat_netft_to_udp_Qquit.exe -lws2_32
+*/
+
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>
+#include <winsock2.h>
+#include <ws2tcpip.h>
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <stdint.h>
+#include <string.h>
+#include <time.h>
+#include <conio.h>
+
+#pragma comment(lib, "Ws2_32.lib")
+
+/* Net F/T */
+#define NETFT_PORT          49152
+#define NETFT_CMD_START     2
+#define NETFT_NUM_SAMPLES   1
+
+/* UDP output IP */
+#define OUT_IP "127.0.0.1"
+
+/* Buffers */
+#define LINE_BUF_SZ 1024
+#define EXPBUF_SZ   512
+#define PATHBUF_SZ  (MAX_PATH * 2)
+
+/* types */
+typedef uint32_t uint32;
+typedef int32_t  int32;
+typedef uint16_t uint16;
+typedef uint8_t  byte;
+
+typedef struct {
+    uint32 rdt_sequence;
+    uint32 ft_sequence;
+    uint32 status;
+    int32  FTData[6];
+} RESPONSE;
+
+/* ---------- helpers ---------- */
+static int ws_init(void){
+    WSADATA wsa;
+    return WSAStartup(MAKEWORD(2,2), &wsa) == 0;
+}
+static void ws_done(void){ WSACleanup(); }
+
+static void trim_newlines(char* s){
+    size_t n=strlen(s);
+    while(n && (s[n-1]=='\n'||s[n-1]=='\r')) s[--n]='\0';
+}
+static void read_line(const char* p,char* o,size_t n){
+    printf("%s",p); fflush(stdout);
+    if(fgets(o,(int)n,stdin)) trim_newlines(o); else o[0]='\0';
+}
+static int read_file(const char* fn,char* o,size_t n){
+    FILE* f=fopen(fn,"rb"); if(!f) return 0;
+    size_t k=fread(o,1,n-1,f); fclose(f); o[k]='\0'; trim_newlines(o); return 1;
+}
+static int ensure_dir(const char* p){
+    DWORD a=GetFileAttributesA(p);
+    if(a!=INVALID_FILE_ATTRIBUTES && (a&FILE_ATTRIBUTE_DIRECTORY)) return 1;
+    return CreateDirectoryA(p,NULL)!=0;
+}
+static double epoch_now(void){
+    struct timespec ts; timespec_get(&ts,TIME_UTC);
+    return (double)ts.tv_sec + (double)ts.tv_nsec/1e9;
+}
+static SOCKET udp_connect_ip(const char* ip,uint16 port){
+    SOCKET s=socket(AF_INET,SOCK_DGRAM,IPPROTO_UDP);
+    if(s==INVALID_SOCKET) return s;
+    struct sockaddr_in a={0};
+    a.sin_family=AF_INET;
+    a.sin_port=htons(port);
+    InetPtonA(AF_INET,ip,&a.sin_addr);
+    if(connect(s,(struct sockaddr*)&a,sizeof(a))==SOCKET_ERROR){
+        closesocket(s); return INVALID_SOCKET;
+    }
+    return s;
+}
+static SOCKET udp_connect_host(const char* host,uint16 port){
+    char ps[16]; snprintf(ps,sizeof(ps),"%u",(unsigned)port);
+    struct addrinfo h={0},*r=NULL;
+    h.ai_family=AF_INET; h.ai_socktype=SOCK_DGRAM;
+    if(getaddrinfo(host,ps,&h,&r)!=0||!r) return INVALID_SOCKET;
+    SOCKET s=socket(r->ai_family,r->ai_socktype,r->ai_protocol);
+    if(s==INVALID_SOCKET){ freeaddrinfo(r); return INVALID_SOCKET; }
+    if(connect(s,r->ai_addr,(int)r->ai_addrlen)==SOCKET_ERROR){
+        closesocket(s); freeaddrinfo(r); return INVALID_SOCKET;
+    }
+    freeaddrinfo(r); return s;
+}
+static void build_req(byte r[8]){
+    *(uint16*)&r[0]=htons(0x1234);
+    *(uint16*)&r[2]=htons(NETFT_CMD_START);
+    *(uint32*)&r[4]=htonl(NETFT_NUM_SAMPLES);
+}
+static int recv_exact(SOCKET s,void* b,int n){
+    return recv(s,(char*)b,n,0)==n;
+}
+static void parse_resp(const byte raw[36],RESPONSE* o){
+    o->rdt_sequence=ntohl(*(uint32*)&raw[0]);
+    o->ft_sequence =ntohl(*(uint32*)&raw[4]);
+    o->status      =ntohl(*(uint32*)&raw[8]);
+    for(int i=0;i<6;i++) o->FTData[i]=ntohl(*(int32*)&raw[12+i*4]);
+}
+static void fmt_line(char* o,size_t n,const RESPONSE* r,double t){
+    static const char* A[6]={"Fx","Fy","Fz","Tx","Ty","Tz"};
+    double v[6]; for(int i=0;i<6;i++) v[i]=(double)r->FTData[i]/1e6;
+    snprintf(o,n,
+      "||%s: %.7f||%s: %.7f||%s: %.7f||%s: %.7f||%s: %.7f||%s: %.7f||t: %.9f\n",
+      A[0],v[0],A[1],v[1],A[2],v[2],
+      A[3],v[3],A[4],v[4],A[5],v[5],t);
+}
+
+/* ---------- main ---------- */
+int main(void){
+    if(!ws_init()) return 1;
+
+    char ip[64], ati[64], exp[EXPBUF_SZ];
+    uint16 out_port;
+
+    read_line("Enter IP/hostname for ATI Net F/T:\n> ", ip, sizeof(ip));
+    read_line("Enter ATI ID (folder):\n> ", ati, sizeof(ati));
+    if(!ati[0]) strncpy(ati,"ATI",sizeof(ati)-1);
+
+    printf("Enter UDP output port (e.g. 7017):\n> ");
+    scanf("%hu",&out_port); getchar();
+
+    if(!read_file("exp_settings.txt",exp,sizeof(exp))){ ws_done(); return 1; }
+
+    char logp[PATHBUF_SZ];
+    char cwd[PATHBUF_SZ]; GetCurrentDirectoryA(sizeof(cwd),cwd);
+    snprintf(logp,sizeof(logp),"%s\\%s\\ati_data.txt",cwd,ati);
+    ensure_dir(ati);
+
+    FILE* logf=fopen(logp,"wb"); if(!logf){ ws_done(); return 1; }
+
+    SOCKET s_nf=udp_connect_host(ip,NETFT_PORT);
+    SOCKET s_out=udp_connect_ip(OUT_IP,out_port);
+    if(s_nf==INVALID_SOCKET||s_out==INVALID_SOCKET){ ws_done(); return 1; }
+
+    byte req[8]; build_req(req);
+    byte raw[36]; RESPONSE resp; char line[LINE_BUF_SZ];
+
+    printf("Streaming... (press Q to quit)\n");
+    for(;;){
+        if(_kbhit()){
+            int c=_getch();
+            if(c=='q'||c=='Q') break;
+        }
+        send(s_nf,(char*)req,sizeof(req),0);
+        if(!recv_exact(s_nf,raw,sizeof(raw))) break;
+        parse_resp(raw,&resp);
+        fmt_line(line,sizeof(line),&resp,epoch_now());
+        fputs(line,stdout);
+        send(s_out,line,(int)strlen(line),0);
+        fputs(line,logf); fflush(logf);
+    }
+
+    closesocket(s_out);
+    closesocket(s_nf);
+    fclose(logf);
+    ws_done();
+    return 0;
+}
